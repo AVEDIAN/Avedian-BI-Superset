@@ -125,6 +125,7 @@ from superset.utils.cache import etag_cache
 from superset.utils.core import apply_max_row_limit, ReservedUrlParameters
 from superset.utils.dates import now_as_float
 from superset.utils.decorators import check_dashboard_access
+from superset.utils.sqllab_execution_context import SqlJsonExecutionContext
 from superset.views.base import (
     api,
     BaseSupersetView,
@@ -2522,6 +2523,47 @@ class Superset(BaseSupersetView):  # pylint: disable=too-many-public-methods
         if command_result["status"] == SqlJsonExecutionStatus.QUERY_IS_RUNNING:
             status_code = 202
         return json_success(command_result["payload"], status_code)
+
+    @staticmethod
+    def _convert_query_to_payload(query: Query) -> str:
+        return json.dumps(
+            {"query": query.to_dict()},
+            default=utils.json_int_dttm_ser,
+            ignore_nan=True,
+        )
+
+    @classmethod
+    def _get_the_query_db(
+        cls, execution_context: SqlJsonExecutionContext, session: Session
+    ) -> Database:
+        mydb = session.query(Database).get(execution_context.database_id)
+        cls._validate_query_db(mydb)
+        return mydb
+
+    @classmethod
+    def _validate_query_db(cls, database: Optional[Database]) -> None:
+        if not database:
+            raise SupersetGenericErrorException(
+                __(
+                    "The database referenced in this query was not found. Please "
+                    "contact an administrator for further assistance or try again."
+                )
+            )
+
+    @classmethod
+    def _get_existing_query(
+        cls, execution_context: SqlJsonExecutionContext, session: Session
+    ) -> Optional[Query]:
+        query = (
+            session.query(Query)
+            .filter_by(
+                client_id=execution_context.client_id,
+                user_id=execution_context.user_id,
+                sql_editor_id=execution_context.sql_editor_id,
+            )
+            .one_or_none()
+        )
+        return query
 
     @has_access
     @event_logger.log_this

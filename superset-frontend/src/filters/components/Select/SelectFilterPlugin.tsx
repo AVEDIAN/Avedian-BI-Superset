@@ -37,7 +37,11 @@ import { useImmerReducer } from 'use-immer';
 import { FormItemProps } from 'antd/lib/form';
 import { PluginFilterSelectProps, SelectValue } from './types';
 import { StyledFormItem, FilterPluginStyle, StatusMessage } from '../common';
-import { getDataRecordFormatter, getSelectExtraFormData } from '../../utils';
+import {
+  formatFilterValue,
+  getDataRecordFormatter,
+  getSelectExtraFormData,
+} from '../../utils';
 
 type DataMaskAction =
   | { type: 'ownState'; ownState: JsonObject }

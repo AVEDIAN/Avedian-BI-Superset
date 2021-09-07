@@ -315,6 +315,18 @@ def test_import_csv(mock_event_logger):
     table = SupersetTestCase.get_table(name=CSV_UPLOAD_TABLE)
     assert "b" not in table.column_names
 
+    # upload again with replace mode and specific columns
+    resp = upload_csv(
+        CSV_FILENAME1,
+        CSV_UPLOAD_TABLE,
+        extra={"if_exists": "replace", "usecols": '["a"]'},
+    )
+    assert success_msg_f1 in resp
+
+    # make sure only specified column name was read
+    table = SupersetTestCase.get_table(name=CSV_UPLOAD_TABLE)
+    assert "b" not in table.column_names
+
     # upload again with replace mode
     resp = upload_csv(CSV_FILENAME1, CSV_UPLOAD_TABLE, extra={"if_exists": "replace"})
     assert success_msg_f1 in resp
