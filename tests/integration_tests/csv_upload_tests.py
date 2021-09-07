@@ -327,6 +327,18 @@ def test_import_csv(mock_event_logger):
     table = SupersetTestCase.get_table(name=CSV_UPLOAD_TABLE)
     assert "b" not in table.column_names
 
+    # upload again with replace mode and specific columns
+    resp = upload_csv(
+        CSV_FILENAME1,
+        CSV_UPLOAD_TABLE,
+        extra={"if_exists": "replace", "usecols": '["a"]'},
+    )
+    assert success_msg_f1 in resp
+
+    # make sure only specified column name was read
+    table = SupersetTestCase.get_table(name=CSV_UPLOAD_TABLE)
+    assert "b" not in table.column_names
+
     # upload again with replace mode
     resp = upload_csv(CSV_FILENAME1, CSV_UPLOAD_TABLE, extra={"if_exists": "replace"})
     assert success_msg_f1 in resp
@@ -424,15 +436,10 @@ def test_import_excel(mock_event_logger):
     assert data == [(0, "john", 1), (1, "paul", 2)]
 
 
-@pytest.mark.usefixtures("setup_csv_upload")
-@pytest.mark.usefixtures("create_columnar_files")
 @mock.patch("superset.db_engine_specs.hive.upload_to_s3", mock_upload_to_s3)
-@mock.patch("superset.views.database.views.event_logger.log_with_context")
-def test_import_parquet(mock_event_logger):
+def test_import_parquet(setup_csv_upload, create_columnar_files):
     if utils.backend() == "hive":
         pytest.skip("Hive doesn't allow parquet upload.")
-
-    test_db = get_upload_db()
 
     success_msg_f1 = f'Columnar file "[\'{PARQUET_FILENAME1}\']" uploaded to table "{PARQUET_UPLOAD_TABLE}"'
 
@@ -451,12 +458,6 @@ def test_import_parquet(mock_event_logger):
             PARQUET_FILENAME1, PARQUET_UPLOAD_TABLE, extra={"if_exists": "append"}
         )
         assert success_msg_f1 in resp
-        mock_event_logger.assert_called_with(
-            action="successful_columnar_upload",
-            database=test_db.name,
-            schema=None,
-            table=PARQUET_UPLOAD_TABLE,
-        )
 
     # upload again with replace mode and specific columns
     resp = upload_columnar(
@@ -477,7 +478,8 @@ def test_import_parquet(mock_event_logger):
     assert success_msg_f1 in resp
 
     data = (
-        test_db.get_sqla_engine()
+        get_upload_db()
+        .get_sqla_engine()
         .execute(f"SELECT * from {PARQUET_UPLOAD_TABLE} ORDER BY b")
         .fetchall()
     )
@@ -491,7 +493,8 @@ def test_import_parquet(mock_event_logger):
     assert success_msg_f2 in resp
 
     data = (
-        test_db.get_sqla_engine()
+        get_upload_db()
+        .get_sqla_engine()
         .execute(f"SELECT * from {PARQUET_UPLOAD_TABLE} ORDER BY b")
         .fetchall()
     )

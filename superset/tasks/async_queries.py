@@ -73,7 +73,7 @@ def load_chart_data_into_cache(
         raise ex
     except Exception as ex:
         # TODO: QueryContext should support SIP-40 style errors
-        error = ex.message if hasattr(ex, "message") else str(ex)  # type: ignore # pylint: disable=no-member
+        error = exc.message if hasattr(exc, "message") else str(exc)  # type: ignore
         errors = [{"message": error}]
         async_query_manager.update_job(
             job_metadata, async_query_manager.STATUS_ERROR, errors=errors
@@ -126,11 +126,11 @@ def load_explore_json_into_cache(  # pylint: disable=too-many-locals
     except SoftTimeLimitExceeded as ex:
         logger.warning("A timeout occurred while loading explore json, error: %s", ex)
         raise ex
-    except Exception as ex:
-        if isinstance(ex, SupersetVizException):
-            errors = ex.errors  # pylint: disable=no-member
+    except Exception as exc:
+        if isinstance(exc, SupersetVizException):
+            errors = exc.errors
         else:
-            error = ex.message if hasattr(ex, "message") else str(ex)  # type: ignore # pylint: disable=no-member
+            error = exc.message if hasattr(exc, "message") else str(exc)  # type: ignore
             errors = [error]
 
         async_query_manager.update_job(

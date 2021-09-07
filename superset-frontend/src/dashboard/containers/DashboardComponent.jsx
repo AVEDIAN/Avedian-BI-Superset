@@ -73,7 +73,6 @@ function mapStateToProps(
   const component = dashboardLayout[id];
   const props = {
     component,
-    getComponentById: id => dashboardLayout[id],
     parentComponent: dashboardLayout[parentId],
     editMode: dashboardState.editMode,
     filters: getActiveFilters(),

@@ -34,10 +34,7 @@ import { usePrevious } from 'src/common/hooks/usePrevious';
 import AdhocMetric from 'src/explore/components/controls/MetricControl/AdhocMetric';
 import AdhocMetricPopoverTrigger from 'src/explore/components/controls/MetricControl/AdhocMetricPopoverTrigger';
 import MetricDefinitionValue from 'src/explore/components/controls/MetricControl/MetricDefinitionValue';
-import {
-  DatasourcePanelDndItem,
-  isDatasourcePanelDndItem,
-} from 'src/explore/components/DatasourcePanel/types';
+import { DatasourcePanelDndItem } from 'src/explore/components/DatasourcePanel/types';
 import { DndItemType } from 'src/explore/components/DndItemType';
 import DndSelectLabel from 'src/explore/components/controls/DndColumnSelectControl/DndSelectLabel';
 import { savedMetricType } from 'src/explore/components/controls/MetricControl/types';

@@ -133,9 +133,7 @@ export default function PluginFilterSelect(props: PluginFilterSelectProps) {
         filterState: {
           ...filterState,
           label: values?.length
-            ? `${(values || [])
-                .map(value => labelFormatter(value, datatype))
-                .join(', ')}${suffix}`
+            ? `${(values || []).map(formatFilterValue).join(', ')}${suffix}`
             : undefined,
           value:
             appSection === AppSection.FILTER_CONFIG_MODAL && defaultToFirstItem

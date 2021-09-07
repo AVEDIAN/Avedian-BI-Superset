@@ -339,7 +339,7 @@ class TestChartsUpdateCommand(SupersetTestCase):
     @patch("superset.security.manager.g")
     @pytest.mark.usefixtures("load_energy_table_with_slice")
     def test_query_context_update_command(self, mock_sm_g, mock_g):
-        """
+        """"
         Test that a user can generate the chart query context
         payloadwithout affecting owners
         """

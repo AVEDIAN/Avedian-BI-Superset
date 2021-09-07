@@ -14,9 +14,8 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=too-many-lines, invalid-name
-from __future__ import annotations
-
+# pylint: disable=comparison-with-callable, line-too-long
+import dataclasses
 import logging
 import re
 from contextlib import closing
@@ -97,7 +96,6 @@ from superset.models.sql_lab import Query, TabState
 from superset.models.user_attributes import UserAttribute
 from superset.queries.dao import QueryDAO
 from superset.security.analytics_db_safety import check_sqlalchemy_uri
-from superset.sql_lab import get_sql_results
 from superset.sql_parse import ParsedQuery, Table
 from superset.sql_validators import get_validator_by_name
 from superset.sqllab.command import CommandResult, ExecuteSqlCommand
@@ -727,8 +725,7 @@ class Superset(BaseSupersetView):  # pylint: disable=too-many-public-methods
     @event_logger.log_this
     @expose("/explore/<datasource_type>/<int:datasource_id>/", methods=["GET", "POST"])
     @expose("/explore/", methods=["GET", "POST"])
-    # pylint: disable=too-many-locals,too-many-branches,too-many-statements
-    def explore(
+    def explore(  # pylint: disable=too-many-locals
         self, datasource_type: Optional[str] = None, datasource_id: Optional[int] = None
     ) -> FlaskResponse:
         form_data, slc = get_form_data(use_slice_data=True)
@@ -1574,9 +1571,7 @@ class Superset(BaseSupersetView):  # pylint: disable=too-many-public-methods
         Dash = Dashboard
         qry = (
             db.session.query(Dash)
-            .filter(  # pylint: disable=comparison-with-callable
-                or_(Dash.created_by_fk == user_id, Dash.changed_by_fk == user_id)
-            )
+            .filter(or_(Dash.created_by_fk == user_id, Dash.changed_by_fk == user_id))
             .order_by(Dash.changed_on.desc())
         )
         payload = [
@@ -2451,78 +2446,275 @@ class Superset(BaseSupersetView):  # pylint: disable=too-many-public-methods
                 return json_error_response(f"{msg}", status=400)
             return json_error_response(f"{msg}")
 
+    @classmethod
+    def _sql_json_async(  # pylint: disable=too-many-arguments
+        cls,
+        session: Session,
+        rendered_query: str,
+        query: Query,
+        expand_data: bool,
+        log_params: Optional[Dict[str, Any]] = None,
+    ) -> FlaskResponse:
+        """
+        Send SQL JSON query to celery workers.
+
+        :param session: SQLAlchemy session object
+        :param rendered_query: the rendered query to perform by workers
+        :param query: The query (SQLAlchemy) object
+        :return: A Flask Response
+        """
+        logger.info("Query %i: Running query on a Celery worker", query.id)
+        # Ignore the celery future object and the request may time out.
+        query_id = query.id
+        try:
+            task = sql_lab.get_sql_results.delay(
+                query.id,
+                rendered_query,
+                return_results=False,
+                store_results=not query.select_as_cta,
+                user_name=g.user.username
+                if g.user and hasattr(g.user, "username")
+                else None,
+                start_time=now_as_float(),
+                expand_data=expand_data,
+                log_params=log_params,
+            )
+
+            # Explicitly forget the task to ensure the task metadata is removed from the
+            # Celery results backend in a timely manner.
+            try:
+                task.forget()
+            except NotImplementedError:
+                logger.warning(
+                    "Unable to forget Celery task as backend"
+                    "does not support this operation"
+                )
+        except Exception as ex:
+            logger.exception("Query %i: %s", query.id, str(ex))
+
+            message = __("Failed to start remote query on a worker.")
+            error = SupersetError(
+                message=message,
+                error_type=SupersetErrorType.ASYNC_WORKERS_ERROR,
+                level=ErrorLevel.ERROR,
+            )
+            error_payload = dataclasses.asdict(error)
+
+            query.set_extra_json_key("errors", [error_payload])
+            query.status = QueryStatus.FAILED
+            query.error_message = message
+            session.commit()
+
+            raise SupersetErrorException(error) from ex
+
+        # Update saved query with execution info from the query execution
+        QueryDAO.update_saved_query_exec_info(query_id)
+
+        resp = json_success(cls._convert_query_to_payload(query), status=202,)
+        session.commit()
+        return resp
+
+    @classmethod
+    def _sql_json_sync(
+        cls,
+        _session: Session,
+        rendered_query: str,
+        query: Query,
+        expand_data: bool,
+        log_params: Optional[Dict[str, Any]] = None,
+    ) -> FlaskResponse:
+        """
+        Execute SQL query (sql json).
+
+        :param rendered_query: The rendered query (included templates)
+        :param query: The query SQL (SQLAlchemy) object
+        :return: A Flask Response
+        :raises: SupersetTimeoutException
+        """
+        try:
+            timeout = config["SQLLAB_TIMEOUT"]
+            timeout_msg = f"The query exceeded the {timeout} seconds timeout."
+            store_results = (
+                is_feature_enabled("SQLLAB_BACKEND_PERSISTENCE")
+                and not query.select_as_cta
+            )
+        return sql_json_executor
+
+            # TODO: set LimitingFactor to display?
+            payload = json.dumps(
+                apply_display_max_row_limit(data),
+                default=utils.pessimistic_json_iso_dttm_ser,
+                ignore_nan=True,
+                encoding=None,
+            )
+        except SupersetTimeoutException as ex:
+            # re-raise exception for api exception handler
+            raise ex
+        except Exception as ex:
+            logger.exception("Query %i failed unexpectedly", query.id)
+            raise SupersetGenericDBErrorException(
+                utils.error_msg_from_exception(ex)
+            ) from ex
+
+        if data.get("status") == QueryStatus.FAILED:
+            # new error payload with rich context
+            if data["errors"]:
+                raise SupersetErrorsException(
+                    [SupersetError(**params) for params in data["errors"]]
+                )
+            # old string-only error message
+            raise SupersetGenericDBErrorException(data["error"])
+
+        return json_success(payload)
+
     @has_access_api
     @handle_api_exception
     @event_logger.log_this
     @expose("/sql_json/", methods=["POST"])
     def sql_json(self) -> FlaskResponse:
-        try:
-            log_params = {
-                "user_agent": cast(Optional[str], request.headers.get("USER_AGENT"))
-            }
-            execution_context = SqlJsonExecutionContext(request.json)
-            command = self._create_sql_json_command(execution_context, log_params)
-            command_result: CommandResult = command.run()
-            return self._create_response_from_execution_context(command_result)
-        except SqlLabException as ex:
-            logger.error(ex.message)
-            self._set_http_status_into_Sql_lab_exception(ex)
-            payload = {"errors": [ex.to_dict()]}
-            return json_error_response(status=ex.status, payload=payload)
+        log_params = {
+            "user_agent": cast(Optional[str], request.headers.get("USER_AGENT"))
+        }
+        execution_context = SqlJsonExecutionContext(request.json)
+        return self.sql_json_exec(execution_context, log_params)
 
-    @staticmethod
-    def _create_sql_json_command(
-        execution_context: SqlJsonExecutionContext, log_params: Optional[Dict[str, Any]]
-    ) -> ExecuteSqlCommand:
-        query_dao = QueryDAO()
-        sql_json_executor = Superset._create_sql_json_executor(
-            execution_context, query_dao
-        )
-        execution_context_convertor = ExecutionContextConvertorImpl()
-        execution_context_convertor.set_max_row_in_display(
-            int(config.get("DISPLAY_MAX_ROW"))  # type: ignore
-        )
-        return ExecuteSqlCommand(
-            execution_context,
-            query_dao,
-            DatabaseDAO(),
-            CanAccessQueryValidatorImpl(),
-            SqlQueryRenderImpl(get_template_processor),
-            sql_json_executor,
-            execution_context_convertor,
-            config.get("SQLLAB_CTAS_NO_LIMIT"),  # type: ignore
-            log_params,
-        )
+    @classmethod
+    def is_query_handled(cls, query: Optional[Query]) -> bool:
+        return query is not None and query.status in [
+            QueryStatus.RUNNING,
+            QueryStatus.PENDING,
+            QueryStatus.TIMED_OUT,
+        ]
 
-    @staticmethod
-    def _create_sql_json_executor(
-        execution_context: SqlJsonExecutionContext, query_dao: QueryDAO
-    ) -> SqlJsonExecutor:
-        sql_json_executor: SqlJsonExecutor
-        if execution_context.is_run_asynchronous():
-            sql_json_executor = ASynchronousSqlJsonExecutor(query_dao, get_sql_results)
-        else:
-            sql_json_executor = SynchronousSqlJsonExecutor(
-                query_dao,
-                get_sql_results,
-                config.get("SQLLAB_TIMEOUT"),  # type: ignore
-                is_feature_enabled("SQLLAB_BACKEND_PERSISTENCE"),
-            )
-        return sql_json_executor
-
-    @staticmethod
-    def _set_http_status_into_Sql_lab_exception(ex: SqlLabException) -> None:
-        if isinstance(ex, QueryIsForbiddenToAccessException):
-            ex.status = 403
-
-    def _create_response_from_execution_context(  # pylint: disable=invalid-name, no-self-use
-        self, command_result: CommandResult,
+    def sql_json_exec(  # pylint: disable=too-many-statements
+        self,
+        execution_context: SqlJsonExecutionContext,
+        log_params: Optional[Dict[str, Any]] = None,
     ) -> FlaskResponse:
+        """Runs arbitrary sql and returns data as json"""
 
         status_code = 200
         if command_result["status"] == SqlJsonExecutionStatus.QUERY_IS_RUNNING:
             status_code = 202
         return json_success(command_result["payload"], status_code)
+
+        query = self._get_existing_query(execution_context, session)
+
+        if self.is_query_handled(query):
+            payload = self._convert_query_to_payload(cast(Query, query))
+            return json_success(payload)
+
+        return self._run_sql_json_exec_from_scratch(
+            execution_context, session, log_params
+        )
+
+    def _run_sql_json_exec_from_scratch(
+        self,
+        execution_context: SqlJsonExecutionContext,
+        session: Session,
+        log_params: Optional[Dict[str, Any]] = None,
+    ) -> FlaskResponse:
+        execution_context.set_database(
+            self._get_the_query_db(execution_context, session)
+        )
+        query = execution_context.create_query()
+        try:
+            session.add(query)
+            session.flush()
+            query_id = query.id
+            session.commit()  # shouldn't be necessary
+        except SQLAlchemyError as ex:
+            logger.error("Errors saving query details %s", str(ex), exc_info=True)
+            session.rollback()
+            query_id = None
+        if not query_id:
+            raise SupersetGenericErrorException(
+                __(
+                    "The database referenced in this query was not found. Please "
+                    "contact an administrator for further assistance or try again."
+                )
+            )
+
+        logger.info("Triggering query_id: %i", query_id)
+
+        try:
+            query.raise_for_access()
+        except SupersetSecurityException as ex:
+            query.set_extra_json_key("errors", [dataclasses.asdict(ex.error)])
+            query.status = QueryStatus.FAILED
+            query.error_message = ex.error.message
+            session.commit()
+            raise SupersetErrorException(ex.error, status=403) from ex
+
+        try:
+            template_processor = get_template_processor(
+                database=query.database, query=query
+            )
+            rendered_query = template_processor.process_template(
+                query.sql, **execution_context.template_params
+            )
+        except TemplateError as ex:
+            query.status = QueryStatus.FAILED
+            session.commit()
+            raise SupersetTemplateParamsErrorException(
+                message=__(
+                    'The query contains one or more malformed template parameters. Please check your query and confirm that all template parameters are surround by double braces, for example, "{{ ds }}". Then, try running your query again.'
+                ),
+                error=SupersetErrorType.INVALID_TEMPLATE_PARAMS_ERROR,
+            ) from ex
+
+        if is_feature_enabled("ENABLE_TEMPLATE_PROCESSING"):
+            # pylint: disable=protected-access
+            ast = template_processor._env.parse(rendered_query)
+            undefined_parameters = find_undeclared_variables(ast)  # type: ignore
+            if undefined_parameters:
+                query.status = QueryStatus.FAILED
+                session.commit()
+                raise SupersetTemplateParamsErrorException(
+                    message=ngettext(
+                        "The parameter %(parameters)s in your query is undefined.",
+                        "The following parameters in your query are undefined: %(parameters)s.",
+                        len(undefined_parameters),
+                        parameters=utils.format_list(undefined_parameters),
+                    )
+                    + " "
+                    + PARAMETER_MISSING_ERR,
+                    error=SupersetErrorType.MISSING_TEMPLATE_PARAMS_ERROR,
+                    extra={
+                        "undefined_parameters": list(undefined_parameters),
+                        "template_parameters": execution_context.template_params,
+                    },
+                )
+
+        if not (config.get("SQLLAB_CTAS_NO_LIMIT") and execution_context.select_as_cta):
+            # set LIMIT after template processing
+            db_engine_spec = execution_context.database.db_engine_spec  # type: ignore
+            limits = [
+                db_engine_spec.get_limit_from_sql(rendered_query),
+                execution_context.limit,
+            ]
+            if limits[0] is None or limits[0] > limits[1]:  # type: ignore
+                query.limiting_factor = LimitingFactor.DROPDOWN
+            elif limits[1] > limits[0]:  # type: ignore
+                query.limiting_factor = LimitingFactor.QUERY
+            else:  # limits[0] == limits[1]
+                query.limiting_factor = LimitingFactor.QUERY_AND_DROPDOWN
+            query.limit = min(lim for lim in limits if lim is not None)
+
+        # Flag for whether or not to expand data
+        # (feature that will expand Presto row objects and arrays)
+        expand_data: bool = execution_context.expand_data
+
+        # Async request.
+        if execution_context.is_run_asynchronous():
+            return self._sql_json_async(
+                session, rendered_query, query, expand_data, log_params
+            )
+        # Sync request.
+        return self._sql_json_sync(
+            session, rendered_query, query, expand_data, log_params
+        )
+        return query
 
     @staticmethod
     def _convert_query_to_payload(query: Query) -> str:

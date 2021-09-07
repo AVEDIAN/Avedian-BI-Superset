@@ -24,7 +24,7 @@ from superset.db_engine_specs.hive import HiveEngineSpec
 
 class DatabricksHiveEngineSpec(HiveEngineSpec):
     engine = "databricks"
-    engine_name = "Databricks Interactive Cluster"
+    engine_name = "Databricks"
     driver = "pyhive"
     _show_functions_column = "function"
 

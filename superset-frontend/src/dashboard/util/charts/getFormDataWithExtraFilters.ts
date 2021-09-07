@@ -70,15 +70,9 @@ export default function getFormDataWithExtraFilters({
   const cachedFormData = cachedFormdataByChart[sliceId];
   if (
     cachedFiltersByChart[sliceId] === filters &&
-    areObjectsEqual(cachedFormData?.color_scheme, colorScheme, {
-      ignoreUndefined: true,
-    }) &&
-    areObjectsEqual(cachedFormData?.color_namespace, colorNamespace, {
-      ignoreUndefined: true,
-    }) &&
-    areObjectsEqual(cachedFormData?.label_colors, labelColors, {
-      ignoreUndefined: true,
-    }) &&
+    cachedFormData?.color_scheme === colorScheme &&
+    cachedFormData?.color_namespace === colorNamespace &&
+    isEqual(cachedFormData?.label_colors, labelColors) &&
     !!cachedFormData &&
     areObjectsEqual(cachedFormData?.dataMask, dataMask, {
       ignoreUndefined: true,

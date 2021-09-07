@@ -19,7 +19,7 @@ import dataclasses
 import json
 import logging
 import re
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import (
@@ -1294,8 +1294,14 @@ class SqlaTable(Model, BaseDatasource):  # pylint: disable=too-many-public-metho
         if row_offset:
             qry = qry.offset(row_offset)
 
-        if series_limit and groupby_series_columns:
-            if db_engine_spec.allows_joins and db_engine_spec.allows_subqueries:
+        if (
+            is_timeseries
+            and timeseries_limit
+            and not time_groupby_inline
+            and groupby_exprs_sans_timestamp
+            and dttm_col
+        ):
+            if db_engine_spec.allows_joins:
                 # some sql dialects require for order by expressions
                 # to also be in the select clause -- others, e.g. vertica,
                 # require a unique inner alias

@@ -132,7 +132,6 @@ DashboardRoles = Table(
 )
 
 
-# pylint: disable=too-many-public-methods
 class Dashboard(Model, AuditMixinNullable, ImportExportMixin):
     """The dashboard object!"""
 
