@@ -18,7 +18,7 @@
  */
 import sqlLabReducer from 'src/SqlLab/reducers/sqlLab';
 import * as actions from 'src/SqlLab/actions/sqlLab';
-import { now } from 'src/modules/dates';
+import { now } from 'src/utils/dates';
 import { table, initialState as mockState } from '../fixtures';
 
 const initialState = mockState.sqlLab;
@@ -96,14 +96,14 @@ describe('sqlLabReducer', () => {
       expect(newState.queryEditors[1].autorun).toBe(true);
     });
     it('should not fail while setting title', () => {
-      const title = 'a new title';
+      const title = 'Untitled Query 1';
       const action = {
         type: actions.QUERY_EDITOR_SET_TITLE,
         queryEditor: qe,
         title,
       };
       newState = sqlLabReducer(newState, action);
-      expect(newState.queryEditors[1].title).toBe(title);
+      expect(newState.queryEditors[0].name).toBe(title);
     });
     it('should not fail while setting Sql', () => {
       const sql = 'SELECT nothing from dev_null';
@@ -181,8 +181,8 @@ describe('sqlLabReducer', () => {
     });
     it('should remove a table', () => {
       const action = {
-        type: actions.REMOVE_TABLE,
-        table: newTable,
+        type: actions.REMOVE_TABLES,
+        tables: [newTable],
       };
       newState = sqlLabReducer(newState, action);
       expect(newState.tables).toHaveLength(0);

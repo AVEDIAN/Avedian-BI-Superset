@@ -23,19 +23,7 @@ from collections import defaultdict, deque
 from contextlib import closing
 from datetime import datetime
 from distutils.version import StrictVersion
-from typing import (
-    Any,
-    Callable,
-    cast,
-    Dict,
-    List,
-    Match,
-    Optional,
-    Pattern,
-    Tuple,
-    TYPE_CHECKING,
-    Union,
-)
+from typing import Any, cast, Dict, List, Optional, Pattern, Tuple, TYPE_CHECKING, Union
 from urllib import parse
 
 import pandas as pd
@@ -45,33 +33,42 @@ from flask_babel import gettext as __, lazy_gettext as _
 from sqlalchemy import Column, literal_column, types
 from sqlalchemy.engine.base import Engine
 from sqlalchemy.engine.reflection import Inspector
-from sqlalchemy.engine.result import RowProxy
-from sqlalchemy.engine.url import make_url, URL
+from sqlalchemy.engine.result import Row as ResultRow
+from sqlalchemy.engine.url import URL
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import ColumnClause, Select
-from sqlalchemy.types import TypeEngine
 
 from superset import cache_manager, is_feature_enabled
 from superset.common.db_query_status import QueryStatus
-from superset.db_engine_specs.base import BaseEngineSpec
+from superset.databases.utils import make_url_safe
+from superset.db_engine_specs.base import BaseEngineSpec, ColumnTypeMapping
 from superset.errors import SupersetErrorType
 from superset.exceptions import SupersetTemplateException
 from superset.models.sql_lab import Query
 from superset.models.sql_types.presto_sql_types import (
     Array,
+    Date,
     Interval,
     Map,
     Row,
+    TimeStamp,
     TinyInteger,
 )
 from superset.result_set import destringify
 from superset.sql_parse import ParsedQuery
+from superset.superset_typing import ResultSetColumnType
 from superset.utils import core as utils
 from superset.utils.core import ColumnSpec, GenericDataType
 
 if TYPE_CHECKING:
     # prevent circular imports
     from superset.models.core import Database
+
+    # need try/catch because pyhive may not be installed
+    try:
+        from pyhive.presto import Cursor  # pylint: disable=unused-import
+    except ImportError:
+        pass
 
 COLUMN_DOES_NOT_EXIST_REGEX = re.compile(
     "line (?P<location>.+?): .*Column '(?P<column_name>.+?)' cannot be resolved"
@@ -95,28 +92,29 @@ CONNECTION_UNKNOWN_DATABASE_ERROR = re.compile(
     r"line (?P<location>.+?): Catalog '(?P<catalog_name>.+?)' does not exist"
 )
 
-
 logger = logging.getLogger(__name__)
 
 
-def get_children(column: Dict[str, str]) -> List[Dict[str, str]]:
+def get_children(column: ResultSetColumnType) -> List[ResultSetColumnType]:
     """
     Get the children of a complex Presto type (row or array).
 
     For arrays, we return a single list with the base type:
 
-        >>> get_children(dict(name="a", type="ARRAY(BIGINT)"))
-        [{"name": "a", "type": "BIGINT"}]
+        >>> get_children(dict(name="a", type="ARRAY(BIGINT)", is_dttm=False))
+        [{"name": "a", "type": "BIGINT", "is_dttm": False}]
 
     For rows, we return a list of the columns:
 
-        >>> get_children(dict(name="a", type="ROW(BIGINT,FOO VARCHAR)"))
-        [{'name': 'a._col0', 'type': 'BIGINT'}, {'name': 'a.foo', 'type': 'VARCHAR'}]
+        >>> get_children(dict(name="a", type="ROW(BIGINT,FOO VARCHAR)",  is_dttm=False))
+        [{'name': 'a._col0', 'type': 'BIGINT', 'is_dttm': False}, {'name': 'a.foo', 'type': 'VARCHAR', 'is_dttm': False}]  # pylint: disable=line-too-long
 
     :param column: dictionary representing a Presto column
     :return: list of dictionaries representing children columns
     """
     pattern = re.compile(r"(?P<type>\w+)\((?P<children>.*)\)")
+    if not column["type"]:
+        raise ValueError
     match = pattern.match(column["type"])
     if not match:
         raise Exception(f"Unable to parse column type {column['type']}")
@@ -125,7 +123,7 @@ def get_children(column: Dict[str, str]) -> List[Dict[str, str]]:
     type_ = group["type"].upper()
     children_type = group["children"]
     if type_ == "ARRAY":
-        return [{"name": column["name"], "type": children_type}]
+        return [{"name": column["name"], "type": children_type, "is_dttm": False}]
 
     if type_ == "ROW":
         nameless_columns = 0
@@ -139,7 +137,12 @@ def get_children(column: Dict[str, str]) -> List[Dict[str, str]]:
                 name = f"_col{nameless_columns}"
                 type_ = parts[0]
                 nameless_columns += 1
-            columns.append({"name": f"{column['name']}.{name.lower()}", "type": type_})
+            _column: ResultSetColumnType = {
+                "name": f"{column['name']}.{name.lower()}",
+                "type": type_,
+                "is_dttm": False,
+            }
+            columns.append(_column)
         return columns
 
     raise Exception(f"Unknown type {type_}!")
@@ -228,18 +231,20 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
 
     @classmethod
     def update_impersonation_config(
-        cls, connect_args: Dict[str, Any], uri: str, username: Optional[str],
+        cls,
+        connect_args: Dict[str, Any],
+        uri: str,
+        username: Optional[str],
     ) -> None:
         """
         Update a configuration dictionary
         that can set the correct properties for impersonating users
         :param connect_args: config to be updated
         :param uri: URI string
-        :param impersonate_user: Flag indicating if impersonation is enabled
         :param username: Effective username
         :return: None
         """
-        url = make_url(uri)
+        url = make_url_safe(uri)
         backend_name = url.get_backend_name()
 
         # Must be Presto connection, enable impersonation, and set optional param
@@ -431,7 +436,7 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
     @classmethod
     def _show_columns(
         cls, inspector: Inspector, table_name: str, schema: Optional[str]
-    ) -> List[RowProxy]:
+    ) -> List[ResultRow]:
         """
         Show presto column names
         :param inspector: object that performs database schema inspection
@@ -443,93 +448,92 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
         full_table = quote(table_name)
         if schema:
             full_table = "{}.{}".format(quote(schema), full_table)
-        columns = inspector.bind.execute("SHOW COLUMNS FROM {}".format(full_table))
-        return columns
+        return inspector.bind.execute(f"SHOW COLUMNS FROM {full_table}").fetchall()
 
     column_type_mappings = (
         (
             re.compile(r"^boolean.*", re.IGNORECASE),
             types.BOOLEAN,
-            utils.GenericDataType.BOOLEAN,
+            GenericDataType.BOOLEAN,
         ),
         (
             re.compile(r"^tinyint.*", re.IGNORECASE),
             TinyInteger(),
-            utils.GenericDataType.NUMERIC,
+            GenericDataType.NUMERIC,
         ),
         (
             re.compile(r"^smallint.*", re.IGNORECASE),
             types.SMALLINT(),
-            utils.GenericDataType.NUMERIC,
+            GenericDataType.NUMERIC,
         ),
         (
             re.compile(r"^integer.*", re.IGNORECASE),
             types.INTEGER(),
-            utils.GenericDataType.NUMERIC,
+            GenericDataType.NUMERIC,
         ),
         (
             re.compile(r"^bigint.*", re.IGNORECASE),
             types.BIGINT(),
-            utils.GenericDataType.NUMERIC,
+            GenericDataType.NUMERIC,
         ),
         (
             re.compile(r"^real.*", re.IGNORECASE),
             types.FLOAT(),
-            utils.GenericDataType.NUMERIC,
+            GenericDataType.NUMERIC,
         ),
         (
             re.compile(r"^double.*", re.IGNORECASE),
             types.FLOAT(),
-            utils.GenericDataType.NUMERIC,
+            GenericDataType.NUMERIC,
         ),
         (
             re.compile(r"^decimal.*", re.IGNORECASE),
             types.DECIMAL(),
-            utils.GenericDataType.NUMERIC,
+            GenericDataType.NUMERIC,
         ),
         (
             re.compile(r"^varchar(\((\d+)\))*$", re.IGNORECASE),
             lambda match: types.VARCHAR(int(match[2])) if match[2] else types.String(),
-            utils.GenericDataType.STRING,
+            GenericDataType.STRING,
         ),
         (
             re.compile(r"^char(\((\d+)\))*$", re.IGNORECASE),
             lambda match: types.CHAR(int(match[2])) if match[2] else types.CHAR(),
-            utils.GenericDataType.STRING,
+            GenericDataType.STRING,
         ),
         (
             re.compile(r"^varbinary.*", re.IGNORECASE),
             types.VARBINARY(),
-            utils.GenericDataType.STRING,
+            GenericDataType.STRING,
         ),
         (
             re.compile(r"^json.*", re.IGNORECASE),
             types.JSON(),
-            utils.GenericDataType.STRING,
+            GenericDataType.STRING,
         ),
         (
             re.compile(r"^date.*", re.IGNORECASE),
-            types.DATETIME(),
-            utils.GenericDataType.TEMPORAL,
+            types.DATE(),
+            GenericDataType.TEMPORAL,
         ),
         (
             re.compile(r"^timestamp.*", re.IGNORECASE),
             types.TIMESTAMP(),
-            utils.GenericDataType.TEMPORAL,
+            GenericDataType.TEMPORAL,
         ),
         (
             re.compile(r"^interval.*", re.IGNORECASE),
             Interval(),
-            utils.GenericDataType.TEMPORAL,
+            GenericDataType.TEMPORAL,
         ),
         (
             re.compile(r"^time.*", re.IGNORECASE),
             types.Time(),
-            utils.GenericDataType.TEMPORAL,
+            GenericDataType.TEMPORAL,
         ),
-        (re.compile(r"^array.*", re.IGNORECASE), Array(), utils.GenericDataType.STRING),
-        (re.compile(r"^map.*", re.IGNORECASE), Map(), utils.GenericDataType.STRING),
-        (re.compile(r"^row.*", re.IGNORECASE), Row(), utils.GenericDataType.STRING),
+        (re.compile(r"^array.*", re.IGNORECASE), Array(), GenericDataType.STRING),
+        (re.compile(r"^map.*", re.IGNORECASE), Map(), GenericDataType.STRING),
+        (re.compile(r"^row.*", re.IGNORECASE), Row(), GenericDataType.STRING),
     )
 
     @classmethod
@@ -661,9 +665,7 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
         Run a SQL query that estimates the cost of a given statement.
 
         :param statement: A single SQL statement
-        :param database: Database instance
         :param cursor: Cursor instance
-        :param username: Effective username
         :return: JSON response from Presto
         """
         sql = f"EXPLAIN (TYPE IO, FORMAT JSON) {statement}"
@@ -732,7 +734,7 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
     @classmethod
     def adjust_database_uri(
         cls, uri: URL, selected_schema: Optional[str] = None
-    ) -> None:
+    ) -> URL:
         database = uri.database
         if selected_schema and database:
             selected_schema = parse.quote(selected_schema, safe="")
@@ -740,15 +742,33 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
                 database = database.split("/")[0] + "/" + selected_schema
             else:
                 database += "/" + selected_schema
-            uri.database = database
+            uri = uri.set(database=database)
+
+        return uri
 
     @classmethod
-    def convert_dttm(cls, target_type: str, dttm: datetime) -> Optional[str]:
+    def convert_dttm(
+        cls, target_type: str, dttm: datetime, db_extra: Optional[Dict[str, Any]] = None
+    ) -> Optional[str]:
+        """
+        Convert a Python `datetime` object to a SQL expression.
+
+        :param target_type: The target type of expression
+        :param dttm: The datetime object
+        :param db_extra: The database extra object
+        :return: The SQL expression
+
+        Superset only defines time zone naive `datetime` objects, though this method
+        handles both time zone naive and aware conversions.
+        """
         tt = target_type.upper()
         if tt == utils.TemporalType.DATE:
-            return f"""from_iso8601_date('{dttm.date().isoformat()}')"""
-        if tt == utils.TemporalType.TIMESTAMP:
-            return f"""from_iso8601_timestamp('{dttm.isoformat(timespec="microseconds")}')"""  # pylint: disable=line-too-long,useless-suppression
+            return f"""DATE '{dttm.date().isoformat()}'"""
+        if tt in (
+            utils.TemporalType.TIMESTAMP,
+            utils.TemporalType.TIMESTAMP_WITH_TIME_ZONE,
+        ):
+            return f"""TIMESTAMP '{dttm.isoformat(timespec="milliseconds", sep=" ")}'"""
         return None
 
     @classmethod
@@ -777,8 +797,10 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
 
     @classmethod
     def expand_data(  # pylint: disable=too-many-locals
-        cls, columns: List[Dict[Any, Any]], data: List[Dict[Any, Any]]
-    ) -> Tuple[List[Dict[Any, Any]], List[Dict[Any, Any]], List[Dict[Any, Any]]]:
+        cls, columns: List[ResultSetColumnType], data: List[Dict[Any, Any]]
+    ) -> Tuple[
+        List[ResultSetColumnType], List[Dict[Any, Any]], List[ResultSetColumnType]
+    ]:
         """
         We do not immediately display rows and arrays clearly in the data grid. This
         method separates out nested fields and data values to help clearly display
@@ -806,7 +828,7 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
         # process each column, unnesting ARRAY types and
         # expanding ROW types into new columns
         to_process = deque((column, 0) for column in columns)
-        all_columns: List[Dict[str, Any]] = []
+        all_columns: List[ResultSetColumnType] = []
         expanded_columns = []
         current_array_level = None
         while to_process:
@@ -826,7 +848,7 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
             name = column["name"]
             values: Optional[Union[str, List[Any]]]
 
-            if column["type"].startswith("ARRAY("):
+            if column["type"] and column["type"].startswith("ARRAY("):
                 # keep processing array children; we append to the right so that
                 # multiple nested arrays are processed breadth-first
                 to_process.append((get_children(column)[0], level + 1))
@@ -860,7 +882,7 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
 
                     i += 1
 
-            if column["type"].startswith("ROW("):
+            if column["type"] and column["type"].startswith("ROW("):
                 # expand columns; we append them to the left so they are added
                 # immediately after the parent
                 expanded = get_children(column)
@@ -871,8 +893,9 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
                 for row in data:
                     values = row.get(name) or []
                     if isinstance(values, str):
-                        row[name] = values = cast(List[Any], destringify(values))
-                    for value, col in zip(values, expanded):
+                        values = cast(Optional[List[Any]], destringify(values))
+                        row[name] = values
+                    for value, col in zip(values or [], expanded):
                         row[col["name"]] = value
 
         data = [
@@ -883,7 +906,7 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
 
     @classmethod
     def extra_table_metadata(
-        cls, database: "Database", table_name: str, schema_name: str
+        cls, database: "Database", table_name: str, schema_name: Optional[str]
     ) -> Dict[str, Any]:
         metadata = {}
 
@@ -915,7 +938,7 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
 
     @classmethod
     def get_create_view(
-        cls, database: "Database", schema: str, table: str
+        cls, database: "Database", schema: Optional[str], table: str
     ) -> Optional[str]:
         """
         Return a CREATE VIEW statement, or `None` if not a view.
@@ -933,19 +956,30 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
             sql = f"SHOW CREATE VIEW {schema}.{table}"
             try:
                 cls.execute(cursor, sql)
-                polled = cursor.poll()
 
-                while polled:
-                    time.sleep(0.2)
-                    polled = cursor.poll()
             except DatabaseError:  # not a VIEW
                 return None
             rows = cls.fetch_data(cursor, 1)
         return rows[0][0]
 
     @classmethod
-    def handle_cursor(cls, cursor: Any, query: Query, session: Session) -> None:
+    def get_tracking_url(cls, cursor: "Cursor") -> Optional[str]:
+        try:
+            if cursor.last_query_id:
+                # pylint: disable=protected-access, line-too-long
+                return f"{cursor._protocol}://{cursor._host}:{cursor._port}/ui/query.html?{cursor.last_query_id}"
+        except AttributeError:
+            pass
+        return None
+
+    @classmethod
+    def handle_cursor(cls, cursor: "Cursor", query: Query, session: Session) -> None:
         """Updates progress information"""
+        tracking_url = cls.get_tracking_url(cursor)
+        if tracking_url:
+            query.tracking_url = tracking_url
+            session.commit()
+
         query_id = query.id
         poll_interval = query.database.connect_args.get(
             "poll_interval", current_app.config["PRESTO_POLL_INTERVAL"]
@@ -1082,10 +1116,18 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
         if values is None:
             return None
 
-        column_names = {column.get("name") for column in columns or []}
+        column_type_by_name = {
+            column.get("name"): column.get("type") for column in columns or []
+        }
+
         for col_name, value in zip(col_names, values):
-            if col_name in column_names:
-                query = query.where(Column(col_name) == value)
+            if col_name in column_type_by_name:
+                if column_type_by_name.get(col_name) == "TIMESTAMP":
+                    query = query.where(Column(col_name, TimeStamp()) == value)
+                elif column_type_by_name.get(col_name) == "DATE":
+                    query = query.where(Column(col_name, Date()) == value)
+                else:
+                    query = query.where(Column(col_name) == value)
         return query
 
     @classmethod
@@ -1174,7 +1216,7 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
         part_fields = indexes[0]["column_names"]
         for k in kwargs.keys():  # pylint: disable=consider-iterating-dictionary
             if k not in k in part_fields:  # pylint: disable=comparison-with-itself
-                msg = "Field [{k}] is not part of the portioning key"
+                msg = f"Field [{k}] is not part of the portioning key"
                 raise SupersetTemplateException(msg)
         if len(kwargs.keys()) != len(part_fields) - 1:
             msg = (
@@ -1215,16 +1257,10 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
     def get_column_spec(
         cls,
         native_type: Optional[str],
+        db_extra: Optional[Dict[str, Any]] = None,
         source: utils.ColumnTypeSource = utils.ColumnTypeSource.GET_TABLE,
-        column_type_mappings: Tuple[
-            Tuple[
-                Pattern[str],
-                Union[TypeEngine, Callable[[Match[str]], TypeEngine]],
-                GenericDataType,
-            ],
-            ...,
-        ] = column_type_mappings,
-    ) -> Union[ColumnSpec, None]:
+        column_type_mappings: Tuple[ColumnTypeMapping, ...] = column_type_mappings,
+    ) -> Optional[ColumnSpec]:
 
         column_spec = super().get_column_spec(
             native_type, column_type_mappings=column_type_mappings

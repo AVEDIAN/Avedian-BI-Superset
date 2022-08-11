@@ -16,7 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React, { ComponentType, FunctionComponent, ReactElement } from 'react';
+import React, {
+  ComponentType,
+  FunctionComponent,
+  ReactElement,
+  forwardRef,
+} from 'react';
 import Select, {
   Props as SelectProps,
   OptionTypeBase,
@@ -29,15 +34,13 @@ const { MenuList: DefaultMenuList } = defaultComponents;
 
 export const DEFAULT_WINDOW_THRESHOLD = 100;
 
-export type WindowedSelectProps<
-  OptionType extends OptionTypeBase
-> = SelectProps<OptionType> & {
-  windowThreshold?: number;
-} & WindowedMenuListProps['selectProps'];
+export type WindowedSelectProps<OptionType extends OptionTypeBase> =
+  SelectProps<OptionType> & {
+    windowThreshold?: number;
+  } & WindowedMenuListProps['selectProps'];
 
-export type WindowedSelectComponentType<
-  OptionType extends OptionTypeBase
-> = FunctionComponent<WindowedSelectProps<OptionType>>;
+export type WindowedSelectComponentType<OptionType extends OptionTypeBase> =
+  FunctionComponent<WindowedSelectProps<OptionType>>;
 
 export function MenuList<OptionType extends OptionTypeBase>({
   children,
@@ -65,13 +68,17 @@ export function MenuList<OptionType extends OptionTypeBase>({
 export default function windowed<OptionType extends OptionTypeBase>(
   SelectComponent: ComponentType<SelectProps<OptionType>>,
 ): WindowedSelectComponentType<OptionType> {
-  function WindowedSelect(
-    props: WindowedSelectProps<OptionType>,
-    ref: React.RefObject<Select<OptionType>>,
-  ) {
-    const { components: components_ = {}, ...restProps } = props;
-    const components = { ...components_, MenuList };
-    return <SelectComponent components={components} ref={ref} {...restProps} />;
-  }
-  return React.forwardRef(WindowedSelect);
+  const WindowedSelect = forwardRef(
+    (
+      props: WindowedSelectProps<OptionType>,
+      ref: React.RefObject<Select<OptionType>>,
+    ) => {
+      const { components: components_ = {}, ...restProps } = props;
+      const components = { ...components_, MenuList };
+      return (
+        <SelectComponent components={components} ref={ref} {...restProps} />
+      );
+    },
+  );
+  return WindowedSelect;
 }

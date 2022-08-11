@@ -24,9 +24,15 @@ import ReactDOM from 'react-dom';
 import { CacheProvider } from '@emotion/react';
 import createCache from '@emotion/cache';
 import { ThemeProvider } from '@superset-ui/core';
-import Menu from 'src/components/Menu/Menu';
+import Menu from 'src/views/components/Menu';
 import { theme } from 'src/preamble';
 
+import { Provider } from 'react-redux';
+import { setupStore } from './store';
+
+// Disable connecting to redux debugger so that the React app injected
+// Below the menu like SqlLab or Explore can connect its redux store to the debugger
+const store = setupStore(true);
 const container = document.getElementById('app');
 const bootstrapJson = container?.getAttribute('data-bootstrap') ?? '{}';
 const bootstrap = JSON.parse(bootstrapJson);
@@ -40,7 +46,9 @@ const app = (
   // @ts-ignore: emotion types defs are incompatible between core and cache
   <CacheProvider value={emotionCache}>
     <ThemeProvider theme={theme}>
-      <Menu data={menu} />
+      <Provider store={store}>
+        <Menu data={menu} />
+      </Provider>
     </ThemeProvider>
   </CacheProvider>
 );

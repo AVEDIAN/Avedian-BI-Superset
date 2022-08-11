@@ -51,10 +51,11 @@ const mockdatasets = [...new Array(3)].map((_, i) => ({
   changed_by: 'user',
   changed_on: new Date().toISOString(),
   database_name: `db ${i}`,
-  explore_url: `/explore/table/${i}`,
+  explore_url: `/explore/?dataset_type=table&dataset_id=${i}`,
   id: i,
   schema: `schema ${i}`,
   table_name: `coolest table ${i}`,
+  owners: [{ username: 'admin', userId: 1 }],
 }));
 
 const mockUser = {
@@ -148,7 +149,7 @@ describe('DatasetList', () => {
       wrapper.find('[data-test="bulk-select-copy"]').text(),
     ).toMatchInlineSnapshot(`"0 Selected"`);
 
-    // Vitual Selected
+    // Virtual Selected
     act(() => {
       wrapper.find(IndeterminateCheckbox).at(1).props().onChange(checkedEvent);
     });
@@ -182,6 +183,12 @@ describe('DatasetList', () => {
   });
 });
 
+jest.mock('react-router-dom', () => ({
+  ...jest.requireActual('react-router-dom'),
+  useLocation: () => ({}),
+  useHistory: () => ({}),
+}));
+
 describe('RTL', () => {
   async function renderAndWait() {
     const mounted = act(async () => {
@@ -190,7 +197,7 @@ describe('RTL', () => {
         <QueryParamProvider>
           <DatasetList {...mockedProps} user={mockUser} />
         </QueryParamProvider>,
-        { useRedux: true },
+        { useRedux: true, useRouter: true },
       );
     });
 

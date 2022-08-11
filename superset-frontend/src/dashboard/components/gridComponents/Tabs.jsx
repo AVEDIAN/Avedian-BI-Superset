@@ -22,7 +22,8 @@ import { styled, t } from '@superset-ui/core';
 import { connect } from 'react-redux';
 import { LineEditableTabs } from 'src/components/Tabs';
 import { LOG_ACTIONS_SELECT_DASHBOARD_TAB } from 'src/logger/LogUtils';
-import { Modal } from 'src/common/components';
+import { AntdModal } from 'src/components';
+import { FILTER_BOX_MIGRATION_STATES } from 'src/explore/constants';
 import DragDroppable from '../dnd/DragDroppable';
 import DragHandle from '../dnd/DragHandle';
 import DashboardComponent from '../../containers/DashboardComponent';
@@ -47,6 +48,8 @@ const propTypes = {
   editMode: PropTypes.bool.isRequired,
   renderHoverMenu: PropTypes.bool,
   directPathToChild: PropTypes.arrayOf(PropTypes.string),
+  activeTabs: PropTypes.arrayOf(PropTypes.string),
+  filterboxMigrationState: FILTER_BOX_MIGRATION_STATES,
 
   // actions (from DashboardComponent.jsx)
   logEvent: PropTypes.func.isRequired,
@@ -72,7 +75,9 @@ const defaultProps = {
   renderHoverMenu: true,
   availableColumnCount: 0,
   columnWidth: 0,
+  activeTabs: [],
   directPathToChild: [],
+  filterboxMigrationState: FILTER_BOX_MIGRATION_STATES.NOOP,
   setActiveTabs() {},
   onResizeStart() {},
   onResize() {},
@@ -109,13 +114,20 @@ const StyledTabsContainer = styled.div`
 export class Tabs extends React.PureComponent {
   constructor(props) {
     super(props);
-    const tabIndex = Math.max(
+    let tabIndex = Math.max(
       0,
       findTabIndexByComponentId({
         currentComponent: props.component,
         directPathToChild: props.directPathToChild,
       }),
     );
+    if (tabIndex === 0 && props.activeTabs?.length) {
+      props.component.children.forEach((tabId, index) => {
+        if (tabIndex === 0 && props.activeTabs.includes(tabId)) {
+          tabIndex = index;
+        }
+      });
+    }
     const { children: tabIds } = props.component;
     const activeKey = tabIds[tabIndex];
 
@@ -135,7 +147,10 @@ export class Tabs extends React.PureComponent {
   }
 
   componentDidUpdate(prevProps, prevState) {
-    if (prevState.activeKey !== this.state.activeKey) {
+    if (
+      prevState.activeKey !== this.state.activeKey ||
+      prevProps.filterboxMigrationState !== this.props.filterboxMigrationState
+    ) {
       this.props.setActiveTabs(this.state.activeKey, prevState.activeKey);
     }
   }
@@ -149,22 +164,6 @@ export class Tabs extends React.PureComponent {
       this.setState(() => ({ tabIndex: maxIndex }));
     }
 
-    if (nextTabsIds.length) {
-      const lastTabId = nextTabsIds[nextTabsIds.length - 1];
-      // if a new tab is added focus on it immediately
-      if (nextTabsIds.length > currTabsIds.length) {
-        // a new tab's path may be empty, here also need to set tabIndex
-        this.setState(() => ({
-          activeKey: lastTabId,
-          tabIndex: maxIndex,
-        }));
-      }
-      // if a tab is removed focus on the first
-      if (nextTabsIds.length < currTabsIds.length) {
-        this.setState(() => ({ activeKey: nextTabsIds[0] }));
-      }
-    }
-
     if (nextProps.isComponentVisible) {
       const nextFocusComponent = getLeafComponentIdFromPath(
         nextProps.directPathToChild,
@@ -173,7 +172,14 @@ export class Tabs extends React.PureComponent {
         this.props.directPathToChild,
       );
 
-      if (nextFocusComponent !== currentFocusComponent) {
+      // If the currently selected component is different than the new one,
+      // or the tab length/order changed, calculate the new tab index and
+      // replace it if it's different than the current one
+      if (
+        nextFocusComponent !== currentFocusComponent ||
+        (nextFocusComponent === currentFocusComponent &&
+          currTabsIds !== nextTabsIds)
+      ) {
         const nextTabIndex = findTabIndexByComponentId({
           currentComponent: nextProps.component,
           directPathToChild: nextProps.directPathToChild,
@@ -192,7 +198,7 @@ export class Tabs extends React.PureComponent {
 
   showDeleteConfirmModal = key => {
     const { component, deleteComponent } = this.props;
-    Modal.confirm({
+    AntdModal.confirm({
       title: t('Delete dashboard tab?'),
       content: (
         <span>
@@ -213,9 +219,12 @@ export class Tabs extends React.PureComponent {
     });
   };
 
-  handleEdit = (key, action) => {
+  handleEdit = (event, action) => {
     const { component, createComponent } = this.props;
     if (action === 'add') {
+      // Prevent the tab container to be selected
+      event?.stopPropagation?.();
+
       createComponent({
         destination: {
           id: component.id,
@@ -228,7 +237,7 @@ export class Tabs extends React.PureComponent {
         },
       });
     } else if (action === 'remove') {
-      this.showDeleteConfirmModal(key);
+      this.showDeleteConfirmModal(event);
     }
   };
 
@@ -255,7 +264,11 @@ export class Tabs extends React.PureComponent {
   }
 
   handleDeleteTab(tabIndex) {
-    this.handleClickTab(Math.max(0, tabIndex - 1));
+    // If we're removing the currently selected tab,
+    // select the previous one (if any)
+    if (this.state.tabIndex === tabIndex) {
+      this.handleClickTab(Math.max(0, tabIndex - 1));
+    }
   }
 
   handleDropOnTab(dropResult) {
@@ -404,8 +417,9 @@ Tabs.defaultProps = defaultProps;
 function mapStateToProps(state) {
   return {
     nativeFilters: state.nativeFilters,
-    directPathToChild: state.dashboardState.directPathToChild,
     activeTabs: state.dashboardState.activeTabs,
+    directPathToChild: state.dashboardState.directPathToChild,
+    filterboxMigrationState: state.dashboardState.filterboxMigrationState,
   };
 }
 export default connect(mapStateToProps)(Tabs);

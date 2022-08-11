@@ -25,18 +25,27 @@ import {
 } from './dashboard.helper';
 
 function openDashboardEditProperties() {
-  cy.get('.dashboard-header [aria-label=edit-alt]').click();
-  cy.get('#save-dash-split-button').trigger('click', { force: true });
-  cy.get('.dropdown-menu').contains('Edit dashboard properties').click();
+  // open dashboard properties edit modal
+  cy.get('.header-with-actions [aria-label="Edit dashboard"]')
+    .should('be.visible')
+    .click();
+  cy.get(
+    '.header-with-actions .right-button-panel .ant-dropdown-trigger',
+  ).trigger('click', {
+    force: true,
+  });
+  cy.get('[data-test=header-actions-menu]')
+    .contains('Edit properties')
+    .click({ force: true });
 }
 
 describe('Dashboard save action', () => {
   beforeEach(() => {
     cy.login();
     cy.visit(WORLD_HEALTH_DASHBOARD);
-    cy.get('#app').then(data => {
-      cy.get('[data-test="dashboard-header"]').then(headerElement => {
-        const dashboardId = headerElement.attr('data-test-id');
+    cy.get('#app').then(() => {
+      cy.get('.dashboard-header-container').then(headerContainerElement => {
+        const dashboardId = headerContainerElement.attr('data-test-id');
 
         cy.intercept('POST', `/superset/copy_dash/${dashboardId}/`).as(
           'copyRequest',
@@ -55,8 +64,8 @@ describe('Dashboard save action', () => {
 
   // change to what the title should be
   it('should save as new dashboard', () => {
-    cy.wait('@copyRequest').then(xhr => {
-      cy.get('[data-test="editable-title-input"]').then(element => {
+    cy.wait('@copyRequest').then(() => {
+      cy.get('[data-test="editable-title"]').then(element => {
         const dashboardTitle = element.attr('title');
         expect(dashboardTitle).to.not.equal(`World Bank's Data`);
       });
@@ -68,26 +77,26 @@ describe('Dashboard save action', () => {
     WORLD_HEALTH_CHARTS.forEach(waitForChartLoad);
 
     // remove box_plot chart from dashboard
-    cy.get('[aria-label="edit-alt"]').click({ timeout: 5000 });
+    cy.get('[aria-label="Edit dashboard"]').click({ timeout: 5000 });
     cy.get('[data-test="dashboard-delete-component-button"]')
       .last()
-      .trigger('moustenter')
+      .trigger('mouseenter')
       .click();
 
     cy.get('[data-test="grid-container"]')
       .find('.box_plot')
       .should('not.exist');
 
-    cy.intercept('POST', '/superset/save_dash/**/').as('saveRequest');
-    cy.get('[data-test="dashboard-header"]')
+    cy.intercept('PUT', '/api/v1/dashboard/**').as('putDashboardRequest');
+    cy.get('.header-with-actions')
       .find('[data-test="header-save-button"]')
       .contains('Save')
       .click();
 
     // go back to view mode
-    cy.wait('@saveRequest');
-    cy.get('[data-test="dashboard-header"]')
-      .find('[aria-label="edit-alt"]')
+    cy.wait('@putDashboardRequest');
+    cy.get('.header-with-actions')
+      .find('[aria-label="Edit dashboard"]')
       .click();
 
     // deleted boxplot should still not exist
@@ -96,8 +105,7 @@ describe('Dashboard save action', () => {
       .should('not.exist');
   });
 
-  // TODO: Fix broken test
-  xit('should save after edit', () => {
+  it('should save after edit', () => {
     cy.get('.dashboard-grid', { timeout: 50000 }) // wait for 50 secs to load dashboard
       .then(() => {
         const dashboardTitle = `Test dashboard [${shortid.generate()}]`;
@@ -108,14 +116,13 @@ describe('Dashboard save action', () => {
         cy.get('.ant-modal-body')
           .contains('Color scheme')
           .parents('.ControlHeader')
-          .next('.Select')
+          .next('.ant-select')
           .click()
-          .then($colorSelect => {
+          .then(() => {
             // select a new color scheme
-            cy.wrap($colorSelect)
-              .find('.Select__option')
+            cy.get('.ant-modal-body')
+              .find('.ant-select-item-option-active')
               .first()
-              .next()
               .click();
           });
 
@@ -128,30 +135,28 @@ describe('Dashboard save action', () => {
           });
 
         // update title
-        cy.get('.ant-modal-body')
-          .contains('Title')
-          .siblings('input')
-          .type(`{selectall}{backspace}${dashboardTitle}`);
+        cy.get('[data-test="dashboard-title-input"]').type(
+          `{selectall}{backspace}${dashboardTitle}`,
+        );
 
         // save edit changes
         cy.get('.ant-modal-footer')
-          .contains('Save')
+          .contains('Apply')
           .click()
           .then(() => {
             // assert that modal edit window has closed
             cy.get('.ant-modal-body').should('not.exist');
 
             // save dashboard changes
-            cy.get('.dashboard-header').contains('Save').click();
+            cy.get('.header-with-actions').contains('Save').click();
 
             // assert success flash
             cy.contains('saved successfully').should('be.visible');
 
             // assert title has been updated
-            cy.get('.editable-title [data-test="editable-title-input"]').should(
-              'have.value',
-              dashboardTitle,
-            );
+            cy.get(
+              '.header-with-actions .title-panel [data-test="editable-title"]',
+            ).should('have.text', dashboardTitle);
           });
       });
   });

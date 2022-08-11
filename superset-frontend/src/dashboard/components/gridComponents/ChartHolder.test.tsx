@@ -18,16 +18,12 @@
  */
 
 import React from 'react';
-import { waitFor } from '@testing-library/react';
+import mockState from 'spec/fixtures/mockState';
 import { sliceId as chartId } from 'spec/fixtures/mockChartQueries';
-import { nativeFiltersInfo } from 'spec/javascripts/dashboard/fixtures/mockNativeFilters';
-import newComponentFactory from 'src/dashboard/util/newComponentFactory';
-import { getMockStore } from 'spec/fixtures/mockStore';
-import { initialState } from 'src/SqlLab/fixtures';
-import { DndProvider } from 'react-dnd';
-import { HTML5Backend } from 'react-dnd-html5-backend';
-import { Provider } from 'react-redux';
 import { screen, render } from 'spec/helpers/testing-library';
+import { nativeFiltersInfo } from 'src/dashboard/fixtures/mockNativeFilters';
+import newComponentFactory from 'src/dashboard/util/newComponentFactory';
+import { initialState } from 'src/SqlLab/fixtures';
 import { CHART_TYPE, ROW_TYPE } from '../../util/componentTypes';
 import { ChartHolder } from './index';
 
@@ -68,25 +64,26 @@ describe('ChartHolder', () => {
     fullSizeChartId: chartId,
     setFullSizeChartId: () => {},
   };
-  const mockStore = getMockStore({
-    ...initialState,
-  });
-  const renderWrapper = () =>
-    render(
-      <Provider store={mockStore}>
-        <DndProvider backend={HTML5Backend}>
-          <ChartHolder {...defaultProps} />{' '}
-        </DndProvider>
-      </Provider>,
-    );
 
-  it('should render full size', async () => {
+  const renderWrapper = () =>
+    render(<ChartHolder {...defaultProps} />, {
+      useRouter: true,
+      useDnd: true,
+      useRedux: true,
+      initialState: { ...mockState, ...initialState },
+    });
+
+  it('should render empty state', async () => {
     renderWrapper();
 
-    const chart = (screen.getByTestId('slice-container')
-      .firstChild as HTMLElement).style;
-
-    await waitFor(() => expect(chart?.width).toBe('992px'));
-    expect(chart?.height).toBe('714px');
+    expect(
+      screen.getByText('No results were returned for this query'),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(
+        'Make sure that the controls are configured properly and the datasource contains data for the selected time range',
+      ),
+    ).not.toBeInTheDocument(); // description should display only in Explore view
+    expect(screen.getByAltText('empty')).toBeVisible();
   });
 });

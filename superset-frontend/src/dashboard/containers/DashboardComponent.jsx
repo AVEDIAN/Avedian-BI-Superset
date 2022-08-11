@@ -37,6 +37,7 @@ import {
   setDirectPathToChild,
   setActiveTabs,
   setFullSizeChartId,
+  postAddSliceFromDashboard,
 } from 'src/dashboard/actions/dashboardState';
 
 const propTypes = {
@@ -73,6 +74,7 @@ function mapStateToProps(
   const component = dashboardLayout[id];
   const props = {
     component,
+    getComponentById: id => dashboardLayout[id],
     parentComponent: dashboardLayout[parentId],
     editMode: dashboardState.editMode,
     filters: getActiveFilters(),
@@ -110,6 +112,7 @@ function mapDispatchToProps(dispatch) {
       setFullSizeChartId,
       setActiveTabs,
       logEvent,
+      postAddSliceFromDashboard,
     },
     dispatch,
   );

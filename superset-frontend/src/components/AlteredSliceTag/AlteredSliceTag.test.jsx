@@ -23,7 +23,7 @@ import { getChartControlPanelRegistry } from '@superset-ui/core';
 import AlteredSliceTag from 'src/components/AlteredSliceTag';
 import ModalTrigger from 'src/components/ModalTrigger';
 import { Tooltip } from 'src/components/Tooltip';
-import TableCollection from 'src/components/dataViewCommon/TableCollection';
+import TableCollection from 'src/components/TableCollection';
 import TableView from 'src/components/TableView';
 
 import {
@@ -62,6 +62,17 @@ describe('AlteredSliceTag', () => {
     props = {
       origFormData: props.origFormData,
       currentFormData: props.origFormData,
+    };
+    wrapper = mount(<AlteredSliceTag {...props} />);
+    expect(wrapper.instance().state.rows).toEqual([]);
+    expect(wrapper.instance().state.hasDiffs).toBe(false);
+    expect(wrapper.instance().render()).toBeNull();
+  });
+
+  it('does not run when temporary controls have changes', () => {
+    props = {
+      origFormData: { ...props.origFormData, url_params: { foo: 'foo' } },
+      currentFormData: { ...props.origFormData, url_params: { bar: 'bar' } },
     };
     wrapper = mount(<AlteredSliceTag {...props} />);
     expect(wrapper.instance().state.rows).toEqual([]);
@@ -215,6 +226,18 @@ describe('AlteredSliceTag', () => {
       const expected = '5, 6, 7, 8, hello, goodbye';
       expect(
         wrapper.instance().formatValue(value, undefined, controlsMap),
+      ).toBe(expected);
+    });
+
+    it('returns Metrics if the field type is metrics', () => {
+      const value = [
+        {
+          label: 'SUM(Sales)',
+        },
+      ];
+      const expected = 'SUM(Sales)';
+      expect(
+        wrapper.instance().formatValue(value, 'metrics', controlsMap),
       ).toBe(expected);
     });
 

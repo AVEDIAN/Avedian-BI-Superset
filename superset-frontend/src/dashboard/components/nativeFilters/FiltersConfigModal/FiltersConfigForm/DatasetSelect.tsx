@@ -19,7 +19,7 @@
 import React, { useCallback, useMemo } from 'react';
 import rison from 'rison';
 import { t, SupersetClient } from '@superset-ui/core';
-import { Select } from 'src/components';
+import { AsyncSelect } from 'src/components';
 import { cacheWrapper } from 'src/utils/cacheWrapper';
 import {
   ClientErrorObject,
@@ -72,11 +72,7 @@ const DatasetSelect = ({ onChange, value }: DatasetSelectProps) => {
         const data: {
           label: string;
           value: string | number;
-        }[] = response.json.result
-          .map(datasetToSelectOption)
-          .sort((a: { label: string }, b: { label: string }) =>
-            a.label.localeCompare(b.label),
-          );
+        }[] = response.json.result.map(datasetToSelectOption);
         return {
           data,
           totalCount: response.json.count,
@@ -89,7 +85,7 @@ const DatasetSelect = ({ onChange, value }: DatasetSelectProps) => {
   };
 
   return (
-    <Select
+    <AsyncSelect
       ariaLabel={t('Dataset')}
       value={value}
       options={loadDatasetOptions}

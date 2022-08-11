@@ -16,9 +16,22 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React, { ReactNode, useState, useCallback } from 'react';
+import React, {
+  ReactNode,
+  useState,
+  useCallback,
+  useRef,
+  useMemo,
+} from 'react';
+import Button from 'src/components/Button';
 import ControlHeader from 'src/explore/components/ControlHeader';
-import Select, { SelectProps, OptionsTypePage } from './Select';
+import AsyncSelect, {
+  AsyncSelectProps,
+  AsyncSelectRef,
+  OptionsTypePage,
+} from './AsyncSelect';
+
+import Select, { SelectProps, OptionsType } from './Select';
 
 export default {
   title: 'Select',
@@ -27,7 +40,7 @@ export default {
 
 const DEFAULT_WIDTH = 200;
 
-const options = [
+const options: OptionsType = [
   {
     label: 'Such an incredibly awesome long long label',
     value: 'Such an incredibly awesome long long label',
@@ -75,14 +88,15 @@ const selectPositions = [
 const ARG_TYPES = {
   options: {
     defaultValue: options,
-    table: {
-      disable: true,
-    },
+    description: `It defines the options of the Select.
+      The options can be static, an array of options.
+      The options can also be async, a promise that returns an array of options.
+    `,
   },
   ariaLabel: {
-    table: {
-      disable: true,
-    },
+    description: `It adds the aria-label tag for accessibility standards.
+      Must be plain English and localized.
+    `,
   },
   labelInValue: {
     defaultValue: true,
@@ -101,11 +115,33 @@ const ARG_TYPES = {
     },
   },
   mode: {
+    description: `It defines whether the Select should allow for
+      the selection of multiple options or single. Single by default.
+    `,
     defaultValue: 'single',
     control: {
       type: 'inline-radio',
       options: ['single', 'multiple'],
     },
+  },
+  allowNewOptions: {
+    description: `It enables the user to create new options.
+      Can be used with standard or async select types.
+      Can be used with any mode, single or multiple. False by default.
+    `,
+  },
+  invertSelection: {
+    description: `It shows a stop-outlined icon at the far right of a selected
+      option instead of the default checkmark.
+      Useful to better indicate to the user that by clicking on a selected
+      option it will be de-selected. False by default.
+    `,
+  },
+  optionFilterProps: {
+    description: `It allows to define which properties of the option object
+      should be looked for when searching.
+      By default label and value.
+    `,
   },
 };
 
@@ -124,21 +160,50 @@ const mountHeader = (type: String) => {
   return header;
 };
 
-export const InteractiveSelect = (args: SelectProps & { header: string }) => (
+const generateOptions = (opts: OptionsType, count: number) => {
+  let generated = opts.slice();
+  let iteration = 0;
+  while (generated.length < count) {
+    iteration += 1;
+    generated = generated.concat(
+      // eslint-disable-next-line no-loop-func
+      generated.map(({ label, value }) => ({
+        label: `${label} ${iteration}`,
+        value: `${value} ${iteration}`,
+      })),
+    );
+  }
+  return generated.slice(0, count);
+};
+
+export const InteractiveSelect = ({
+  header,
+  options,
+  optionsCount,
+  ...args
+}: SelectProps & { header: string; optionsCount: number }) => (
   <div
     style={{
       width: DEFAULT_WIDTH,
     }}
   >
-    <Select {...args} header={mountHeader(args.header)} />
+    <Select
+      {...args}
+      options={
+        Array.isArray(options)
+          ? generateOptions(options, optionsCount)
+          : options
+      }
+      header={mountHeader(header)}
+    />
   </div>
 );
 
 InteractiveSelect.args = {
-  autoFocus: false,
+  autoFocus: true,
   allowNewOptions: false,
   allowClear: false,
-  showSearch: false,
+  showSearch: true,
   disabled: false,
   invertSelection: false,
   placeholder: 'Select ...',
@@ -147,19 +212,27 @@ InteractiveSelect.args = {
 
 InteractiveSelect.argTypes = {
   ...ARG_TYPES,
+  optionsCount: {
+    defaultValue: options.length,
+    control: {
+      type: 'number',
+    },
+  },
   header: {
     defaultValue: 'none',
+    description: `It adds a header on top of the Select. Can be any ReactNode.`,
     control: { type: 'inline-radio', options: ['none', 'text', 'control'] },
   },
   pageSize: {
-    table: {
-      disable: true,
-    },
+    description: `It defines how many results should be included in the query response.
+      Works in async mode only (See the options property).
+    `,
   },
   fetchOnlyOnSearch: {
-    table: {
-      disable: true,
-    },
+    description: `It fires a request against the server only after searching.
+      Works in async mode only (See the options property).
+      Undefined by default.
+    `,
   },
 };
 
@@ -313,20 +386,21 @@ const USERS = [
   'Claire',
   'Benedetta',
   'Ilenia',
-];
+].sort();
 
-export const AsyncSelect = ({
+export const AsynchronousSelect = ({
   fetchOnlyOnSearch,
   withError,
   withInitialValue,
   responseTime,
   ...rest
-}: SelectProps & {
+}: AsyncSelectProps & {
   withError: boolean;
   withInitialValue: boolean;
   responseTime: number;
 }) => {
   const [requests, setRequests] = useState<ReactNode[]>([]);
+  const ref = useRef<AsyncSelectRef>(null);
 
   const getResults = (username?: string) => {
     let results: { label: string; value: string }[] = [];
@@ -389,6 +463,11 @@ export const AsyncSelect = ({
       reject(new Error('Error while fetching the names from the server'));
     });
 
+  const initialValue = useMemo(
+    () => ({ label: 'Valentina', value: 'Valentina' }),
+    [],
+  );
+
   return (
     <>
       <div
@@ -396,16 +475,13 @@ export const AsyncSelect = ({
           width: DEFAULT_WIDTH,
         }}
       >
-        <Select
+        <AsyncSelect
           {...rest}
+          ref={ref}
           fetchOnlyOnSearch={fetchOnlyOnSearch}
           options={withError ? fetchUserListError : fetchUserListPage}
-          placeholder={fetchOnlyOnSearch ? 'Type anything' : 'Select...'}
-          value={
-            withInitialValue
-              ? { label: 'Valentina', value: 'Valentina' }
-              : undefined
-          }
+          placeholder={fetchOnlyOnSearch ? 'Type anything' : 'AsyncSelect...'}
+          value={withInitialValue ? initialValue : undefined}
         />
       </div>
       <div
@@ -424,19 +500,34 @@ export const AsyncSelect = ({
           <p key={`request-${index}`}>{request}</p>
         ))}
       </div>
+      <Button
+        style={{
+          position: 'absolute',
+          top: 452,
+          left: DEFAULT_WIDTH + 580,
+        }}
+        onClick={() => {
+          ref.current?.clearCache();
+          setRequests([]);
+        }}
+      >
+        Clear cache
+      </Button>
     </>
   );
 };
 
-AsyncSelect.args = {
+AsynchronousSelect.args = {
+  allowClear: false,
   allowNewOptions: false,
   fetchOnlyOnSearch: false,
   pageSize: 10,
   withError: false,
   withInitialValue: false,
+  tokenSeparators: ['\n', '\t', ';'],
 };
 
-AsyncSelect.argTypes = {
+AsynchronousSelect.argTypes = {
   ...ARG_TYPES,
   header: {
     table: {
@@ -469,7 +560,7 @@ AsyncSelect.argTypes = {
   },
 };
 
-AsyncSelect.story = {
+AsynchronousSelect.story = {
   parameters: {
     knobs: {
       disable: true,

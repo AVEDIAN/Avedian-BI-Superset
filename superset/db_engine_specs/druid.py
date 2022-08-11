@@ -17,7 +17,10 @@
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+from sqlalchemy import types
+from sqlalchemy.engine.reflection import Inspector
 
 from superset import is_feature_enabled
 from superset.db_engine_specs.base import BaseEngineSpec
@@ -41,26 +44,28 @@ class DruidEngineSpec(BaseEngineSpec):
 
     _time_grain_expressions = {
         None: "{col}",
-        "PT1S": "TIME_FLOOR({col}, 'PT1S')",
-        "PT5S": "TIME_FLOOR({col}, 'PT5S')",
-        "PT30S": "TIME_FLOOR({col}, 'PT30S')",
-        "PT1M": "TIME_FLOOR({col}, 'PT1M')",
-        "PT5M": "TIME_FLOOR({col}, 'PT5M')",
-        "PT10M": "TIME_FLOOR({col}, 'PT10M')",
-        "PT15M": "TIME_FLOOR({col}, 'PT15M')",
-        "PT30M": "TIME_FLOOR({col}, 'PT30M')",
-        "PT1H": "TIME_FLOOR({col}, 'PT1H')",
-        "PT6H": "TIME_FLOOR({col}, 'PT6H')",
-        "P1D": "TIME_FLOOR({col}, 'P1D')",
-        "P1W": "TIME_FLOOR({col}, 'P1W')",
-        "P1M": "TIME_FLOOR({col}, 'P1M')",
-        "P3M": "TIME_FLOOR({col}, 'P3M')",
-        "P1Y": "TIME_FLOOR({col}, 'P1Y')",
+        "PT1S": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'PT1S')",
+        "PT5S": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'PT5S')",
+        "PT30S": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'PT30S')",
+        "PT1M": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'PT1M')",
+        "PT5M": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'PT5M')",
+        "PT10M": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'PT10M')",
+        "PT15M": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'PT15M')",
+        "PT30M": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'PT30M')",
+        "PT1H": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'PT1H')",
+        "PT6H": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'PT6H')",
+        "P1D": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'P1D')",
+        "P1W": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'P1W')",
+        "P1M": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'P1M')",
+        "P3M": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'P3M')",
+        "P1Y": "TIME_FLOOR(CAST({col} AS TIMESTAMP), 'P1Y')",
         "P1W/1970-01-03T00:00:00Z": (
-            "TIME_SHIFT(TIME_FLOOR(TIME_SHIFT({col}, 'P1D', 1), 'P1W'), 'P1D', 5)"
+            "TIME_SHIFT(TIME_FLOOR(TIME_SHIFT(CAST({col} AS TIMESTAMP), "
+            "'P1D', 1), 'P1W'), 'P1D', 5)"
         ),
         "1969-12-28T00:00:00Z/P1W": (
-            "TIME_SHIFT(TIME_FLOOR(TIME_SHIFT({col}, 'P1D', 1), 'P1W'), 'P1D', -1)"
+            "TIME_SHIFT(TIME_FLOOR(TIME_SHIFT(CAST({col} AS TIMESTAMP), "
+            "'P1D', 1), 'P1W'), 'P1D', -1)"
         ),
     }
 
@@ -94,7 +99,9 @@ class DruidEngineSpec(BaseEngineSpec):
         return extra
 
     @classmethod
-    def convert_dttm(cls, target_type: str, dttm: datetime) -> Optional[str]:
+    def convert_dttm(
+        cls, target_type: str, dttm: datetime, db_extra: Optional[Dict[str, Any]] = None
+    ) -> Optional[str]:
         tt = target_type.upper()
         if tt == utils.TemporalType.DATE:
             return f"CAST(TIME_PARSE('{dttm.date().isoformat()}') AS DATE)"
@@ -115,3 +122,17 @@ class DruidEngineSpec(BaseEngineSpec):
         Convert from number of milliseconds since the epoch to a timestamp.
         """
         return "MILLIS_TO_TIMESTAMP({col})"
+
+    @classmethod
+    def get_columns(
+        cls, inspector: Inspector, table_name: str, schema: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Update the Druid type map.
+        """
+        # pylint: disable=import-outside-toplevel
+        from pydruid.db.sqlalchemy import type_map
+
+        type_map["complex<hllsketch>"] = types.BLOB
+
+        return super().get_columns(inspector, table_name, schema)

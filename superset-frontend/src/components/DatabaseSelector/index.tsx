@@ -19,10 +19,11 @@
 import React, { ReactNode, useState, useMemo, useEffect } from 'react';
 import { styled, SupersetClient, t } from '@superset-ui/core';
 import rison from 'rison';
-import { Select } from 'src/components';
+import { AsyncSelect, Select } from 'src/components';
 import Label from 'src/components/Label';
 import { FormLabel } from 'src/components/Form';
 import RefreshLabel from 'src/components/RefreshLabel';
+import { useToasts } from 'src/components/MessageToasts/withToasts';
 
 const DatabaseSelectorWrapper = styled.div`
   ${({ theme }) => `
@@ -41,6 +42,7 @@ const DatabaseSelectorWrapper = styled.div`
     }
 
     .select {
+      width: calc(100% - 30px - ${theme.gridUnit}px);
       flex: 1;
     }
 
@@ -55,6 +57,15 @@ const LabelStyle = styled.div`
   flex-direction: row;
   align-items: center;
   margin-left: ${({ theme }) => theme.gridUnit - 2}px;
+
+  .backend {
+    overflow: visible;
+  }
+
+  .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 `;
 
 type DatabaseValue = {
@@ -75,13 +86,15 @@ export type DatabaseObject = {
 
 type SchemaValue = { label: string; value: string };
 
-interface DatabaseSelectorProps {
-  db?: DatabaseObject;
+export interface DatabaseSelectorProps {
+  db?: DatabaseObject | null;
+  emptyState?: ReactNode;
   formMode?: boolean;
   getDbList?: (arg0: any) => {};
   handleError: (msg: string) => void;
   isDatabaseSelectEnabled?: boolean;
   onDbChange?: (db: DatabaseObject) => void;
+  onEmptyResults?: (searchText?: string) => void;
   onSchemaChange?: (schema?: string) => void;
   onSchemasLoad?: (schemas: Array<object>) => void;
   readOnly?: boolean;
@@ -97,18 +110,22 @@ const SelectLabel = ({
   databaseName: string;
 }) => (
   <LabelStyle>
-    <Label>{backend}</Label>
-    {databaseName}
+    <Label className="backend">{backend}</Label>
+    <span className="name" title={databaseName}>
+      {databaseName}
+    </span>
   </LabelStyle>
 );
 
 export default function DatabaseSelector({
   db,
   formMode = false,
+  emptyState,
   getDbList,
   handleError,
   isDatabaseSelectEnabled = true,
   onDbChange,
+  onEmptyResults,
   onSchemaChange,
   onSchemasLoad,
   readOnly = false,
@@ -132,64 +149,67 @@ export default function DatabaseSelector({
     schema ? { label: schema, value: schema } : undefined,
   );
   const [refresh, setRefresh] = useState(0);
+  const { addSuccessToast } = useToasts();
 
   const loadDatabases = useMemo(
-    () => async (
-      search: string,
-      page: number,
-      pageSize: number,
-    ): Promise<{
-      data: DatabaseValue[];
-      totalCount: number;
-    }> => {
-      const queryParams = rison.encode({
-        order_columns: 'database_name',
-        order_direction: 'asc',
-        page,
-        page_size: pageSize,
-        ...(formMode || !sqlLabMode
-          ? { filters: [{ col: 'database_name', opr: 'ct', value: search }] }
-          : {
-              filters: [
-                { col: 'database_name', opr: 'ct', value: search },
-                {
-                  col: 'expose_in_sqllab',
-                  opr: 'eq',
-                  value: true,
-                },
-              ],
-            }),
-      });
-      const endpoint = `/api/v1/database/?q=${queryParams}`;
-      return SupersetClient.get({ endpoint }).then(({ json }) => {
-        const { result } = json;
-        if (getDbList) {
-          getDbList(result);
-        }
-        if (result.length === 0) {
-          handleError(t("It seems you don't have access to any database"));
-        }
-        const options = result.map((row: DatabaseObject) => ({
-          label: (
-            <SelectLabel
-              backend={row.backend}
-              databaseName={row.database_name}
-            />
-          ),
-          value: row.id,
-          id: row.id,
-          database_name: row.database_name,
-          backend: row.backend,
-          allow_multi_schema_metadata_fetch:
-            row.allow_multi_schema_metadata_fetch,
-        }));
-        return {
-          data: options,
-          totalCount: options.length,
-        };
-      });
-    },
-    [formMode, getDbList, handleError, sqlLabMode],
+    () =>
+      async (
+        search: string,
+        page: number,
+        pageSize: number,
+      ): Promise<{
+        data: DatabaseValue[];
+        totalCount: number;
+      }> => {
+        const queryParams = rison.encode({
+          order_columns: 'database_name',
+          order_direction: 'asc',
+          page,
+          page_size: pageSize,
+          ...(formMode || !sqlLabMode
+            ? { filters: [{ col: 'database_name', opr: 'ct', value: search }] }
+            : {
+                filters: [
+                  { col: 'database_name', opr: 'ct', value: search },
+                  {
+                    col: 'expose_in_sqllab',
+                    opr: 'eq',
+                    value: true,
+                  },
+                ],
+              }),
+        });
+        const endpoint = `/api/v1/database/?q=${queryParams}`;
+        return SupersetClient.get({ endpoint }).then(({ json }) => {
+          const { result } = json;
+          if (getDbList) {
+            getDbList(result);
+          }
+          if (result.length === 0) {
+            if (onEmptyResults) onEmptyResults(search);
+          }
+          const options = result.map((row: DatabaseObject) => ({
+            label: (
+              <SelectLabel
+                backend={row.backend}
+                databaseName={row.database_name}
+              />
+            ),
+            value: row.id,
+            id: row.id,
+            database_name: row.database_name,
+            backend: row.backend,
+            allow_multi_schema_metadata_fetch:
+              row.allow_multi_schema_metadata_fetch,
+          }));
+
+          return {
+            data: options,
+            totalCount: options.length,
+          };
+        });
+      },
+    [formMode, getDbList, sqlLabMode],
   );
 
   useEffect(() => {
@@ -201,22 +221,19 @@ export default function DatabaseSelector({
       // TODO: Would be nice to add pagination in a follow-up. Needs endpoint changes.
       SupersetClient.get({ endpoint })
         .then(({ json }) => {
-          const options = json.result
-            .map((s: string) => ({
-              value: s,
-              label: s,
-              title: s,
-            }))
-            .sort((a: { label: string }, b: { label: string }) =>
-              a.label.localeCompare(b.label),
-            );
+          const options = json.result.map((s: string) => ({
+            value: s,
+            label: s,
+            title: s,
+          }));
           if (onSchemasLoad) {
             onSchemasLoad(options);
           }
           setSchemaOptions(options);
           setLoadingSchemas(false);
+          if (refresh > 0) addSuccessToast('List refreshed');
         })
-        .catch(e => {
+        .catch(() => {
           setLoadingSchemas(false);
           handleError(t('There was an error loading the schemas'));
         });
@@ -255,12 +272,13 @@ export default function DatabaseSelector({
 
   function renderDatabaseSelect() {
     return renderSelectRow(
-      <Select
+      <AsyncSelect
         ariaLabel={t('Select database or type database name')}
         optionFilterProps={['database_name', 'value']}
         data-test="select-database"
         header={<FormLabel>{t('Database')}</FormLabel>}
         lazyLoading={false}
+        notFoundContent={emptyState}
         onChange={changeDataBase}
         value={currentDb}
         placeholder={t('Select database or type database name')}
@@ -278,14 +296,12 @@ export default function DatabaseSelector({
         tooltipContent={t('Force refresh schema list')}
       />
     );
-
     return renderSelectRow(
       <Select
         ariaLabel={t('Select schema or type schema name')}
-        disabled={readOnly}
+        disabled={!currentDb || readOnly}
         header={<FormLabel>{t('Schema')}</FormLabel>}
         labelInValue
-        lazyLoading={false}
         loading={loadingSchemas}
         name="select-schema"
         placeholder={t('Select schema or type schema name')}

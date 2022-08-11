@@ -71,7 +71,7 @@ def load_engine_specs() -> List[Type[BaseEngineSpec]]:
         try:
             engine_spec = ep.load()
         except Exception:  # pylint: disable=broad-except
-            logger.warning("Unable to load Superset DB engine spec: %s", engine_spec)
+            logger.warning("Unable to load Superset DB engine spec: %s", ep.name)
             continue
         engine_specs.append(engine_spec)
 
@@ -116,6 +116,9 @@ def get_available_engine_specs() -> Dict[Type[BaseEngineSpec], Set[str]]:
                 hasattr(attribute, "dialect")
                 and inspect.isclass(attribute.dialect)
                 and issubclass(attribute.dialect, DefaultDialect)
+                # adodbapi dialect is removed in SQLA 1.4 and doesn't implement the
+                # `dbapi` method, hence needs to be ignored to avoid logging a warning
+                and attribute.dialect.driver != "adodbapi"
             ):
                 try:
                     attribute.dialect.dbapi()

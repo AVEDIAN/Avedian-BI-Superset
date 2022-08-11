@@ -14,7 +14,6 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-from flask.ctx import AppContext
 from pytest_mock import MockFixture
 
 from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
@@ -27,7 +26,7 @@ class ProgrammingError(Exception):
 
 
 def test_validate_parameters_simple(
-    mocker: MockFixture, app_context: AppContext,
+    mocker: MockFixture,
 ) -> None:
     from superset.db_engine_specs.gsheets import (
         GSheetsEngineSpec,
@@ -39,11 +38,18 @@ def test_validate_parameters_simple(
         "catalog": {},
     }
     errors = GSheetsEngineSpec.validate_parameters(parameters)
-    assert errors == []
+    assert errors == [
+        SupersetError(
+            message="Sheet name is required",
+            error_type=SupersetErrorType.CONNECTION_MISSING_PARAMETERS_ERROR,
+            level=ErrorLevel.WARNING,
+            extra={"catalog": {"idx": 0, "name": True}},
+        ),
+    ]
 
 
 def test_validate_parameters_catalog(
-    mocker: MockFixture, app_context: AppContext,
+    mocker: MockFixture,
 ) -> None:
     from superset.db_engine_specs.gsheets import (
         GSheetsEngineSpec,
@@ -74,11 +80,18 @@ def test_validate_parameters_catalog(
 
     assert errors == [
         SupersetError(
-            message="URL could not be identified",
+            message=(
+                "The URL could not be identified. Please check for typos "
+                "and make sure that ‘Type of Google Sheets allowed’ "
+                "selection matches the input."
+            ),
             error_type=SupersetErrorType.TABLE_DOES_NOT_EXIST_ERROR,
             level=ErrorLevel.WARNING,
             extra={
-                "catalog": {"idx": 0, "url": True,},
+                "catalog": {
+                    "idx": 0,
+                    "url": True,
+                },
                 "issue_codes": [
                     {
                         "code": 1003,
@@ -92,11 +105,18 @@ def test_validate_parameters_catalog(
             },
         ),
         SupersetError(
-            message="URL could not be identified",
+            message=(
+                "The URL could not be identified. Please check for typos "
+                "and make sure that ‘Type of Google Sheets allowed’ "
+                "selection matches the input."
+            ),
             error_type=SupersetErrorType.TABLE_DOES_NOT_EXIST_ERROR,
             level=ErrorLevel.WARNING,
             extra={
-                "catalog": {"idx": 2, "url": True,},
+                "catalog": {
+                    "idx": 2,
+                    "url": True,
+                },
                 "issue_codes": [
                     {
                         "code": 1003,
@@ -112,12 +132,14 @@ def test_validate_parameters_catalog(
     ]
 
     create_engine.assert_called_with(
-        "gsheets://", service_account_info={}, subject="admin@example.com",
+        "gsheets://",
+        service_account_info={},
+        subject="admin@example.com",
     )
 
 
 def test_validate_parameters_catalog_and_credentials(
-    mocker: MockFixture, app_context: AppContext,
+    mocker: MockFixture,
 ) -> None:
     from superset.db_engine_specs.gsheets import (
         GSheetsEngineSpec,
@@ -147,11 +169,18 @@ def test_validate_parameters_catalog_and_credentials(
     errors = GSheetsEngineSpec.validate_parameters(parameters)  # ignore: type
     assert errors == [
         SupersetError(
-            message="URL could not be identified",
+            message=(
+                "The URL could not be identified. Please check for typos "
+                "and make sure that ‘Type of Google Sheets allowed’ "
+                "selection matches the input."
+            ),
             error_type=SupersetErrorType.TABLE_DOES_NOT_EXIST_ERROR,
             level=ErrorLevel.WARNING,
             extra={
-                "catalog": {"idx": 2, "url": True,},
+                "catalog": {
+                    "idx": 2,
+                    "url": True,
+                },
                 "issue_codes": [
                     {
                         "code": 1003,
@@ -167,5 +196,7 @@ def test_validate_parameters_catalog_and_credentials(
     ]
 
     create_engine.assert_called_with(
-        "gsheets://", service_account_info={}, subject="admin@example.com",
+        "gsheets://",
+        service_account_info={},
+        subject="admin@example.com",
     )

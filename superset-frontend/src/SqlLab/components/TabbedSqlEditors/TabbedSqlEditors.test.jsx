@@ -55,7 +55,7 @@ describe('TabbedSqlEditors', () => {
       schema: null,
       selectedText: null,
       sql: 'SELECT ds...',
-      title: 'Untitled Query',
+      name: 'Untitled Query',
     },
   ];
   const queries = {
@@ -79,6 +79,7 @@ describe('TabbedSqlEditors', () => {
     defaultQueryLimit: 1000,
     maxRow: 100000,
   };
+
   const getWrapper = () =>
     shallow(<TabbedSqlEditors store={store} {...mockedProps} />)
       .dive()
@@ -176,8 +177,17 @@ describe('TabbedSqlEditors', () => {
 
     wrapper.instance().newQueryEditor();
     expect(
-      wrapper.instance().props.actions.addQueryEditor.getCall(0).args[0].title,
+      wrapper.instance().props.actions.addQueryEditor.getCall(0).args[0].name,
     ).toContain('Untitled Query');
+  });
+  it('should properly increment query tab name', () => {
+    wrapper = getWrapper();
+    sinon.stub(wrapper.instance().props.actions, 'addQueryEditor');
+
+    wrapper.instance().newQueryEditor();
+    expect(
+      wrapper.instance().props.actions.addQueryEditor.getCall(0).args[0].name,
+    ).toContain('Untitled Query 2');
   });
   it('should duplicate query editor', () => {
     wrapper = getWrapper();
@@ -226,5 +236,11 @@ describe('TabbedSqlEditors', () => {
     expect(wrapper.find(EditableTabs).props().hideAdd).toBe(false);
     wrapper.setProps({ offline: true });
     expect(wrapper.find(EditableTabs).props().hideAdd).toBe(true);
+  });
+  it('should have an empty state when query editors is empty', () => {
+    wrapper = getWrapper();
+    wrapper.setProps({ queryEditors: [] });
+    const firstTab = wrapper.find(EditableTabs.TabPane).first();
+    expect(firstTab.props()['data-key']).toBe(0);
   });
 });
